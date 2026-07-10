@@ -1466,6 +1466,10 @@ function PanelZoomIntegration:displayCurrentPanel()
     
     logger.info("DynamicPanelZoom: Successfully created panel image with document settings")
 
+    if self.custom_rotation and Screen:getRotationMode() ~= self.custom_rotation then
+        self.ui:handleEvent(Event:new("SetRotationMode", self.custom_rotation))
+    end
+
     -- Calculate panel aspect ratio for border logic
     local panel_aspect_ratio = nil
     if panel and dim then
@@ -1548,6 +1552,9 @@ function PanelZoomIntegration:toggleRotation()
 
     logger.info("Rotation:", current, "->", new_mode)
     
+    -- Crucial: Save this state to the instance variable checked during page swaps
+    self.custom_rotation = new_mode
+    
     self.ui:handleEvent(Event:new("SetRotationMode", new_mode))
 
     -- 2. Force an immediate recalculation and repaint of the active panel
@@ -1558,6 +1565,53 @@ function PanelZoomIntegration:toggleRotation()
     end
 
     return true
+end
+
+-- Hook into KOReader's document event flow
+function PanelZoomIntegration:onPageChanged()
+    logger.info("OnPageChanged asd:")
+    -- If the user rotated using our plugin, enforce it on the new page
+    if self.custom_rotation and Screen:getRotationMode() ~= self.custom_rotation then
+        self.ui:handleEvent(Event:new("SetRotationMode", self.custom_rotation))
+        UIManager:nextTick(function()
+            if self.displayCurrentPanel then
+                self:displayCurrentPanel()
+            end
+        end)
+    end
+end
+
+-- Add or update these event handlers inside your plugin's main table
+
+function PanelZoomIntegration:onPageForward()
+    -- Check if your custom zoom widget is currently active
+    if self._current_imgviewer and #self.current_panels > 0 then
+        -- 1. Tell KOReader's core engine to change the page behind the scenes
+        self.ui.view:onPageForward()
+        
+        -- 2. Force your plugin to rebuild/re-fetch panels for the brand new page
+        self:importToggleZoomPanels() 
+        
+        -- 3. Show the first panel of this new page in your zoom view
+        self.current_panel_index = 1
+        self:displayCurrentPanel()
+        
+        return true -- Stop KOReader from running its default page forward behavior
+    end
+end
+
+function PanelZoomIntegration:onPageBackward()
+    if self._current_imgviewer and #self.current_panels > 0 then
+        self.ui.view:onPageBackward()
+        
+        self:importToggleZoomPanels()
+        
+        -- If going backward, you probably want to drop them on the *last* panel of the previous page
+        self.current_panel_index = #self.current_panels
+        self:displayCurrentPanel()
+        
+        return true -- Stop the default behavior
+    end
 end
 
 function PanelZoomIntegration:setStandardMarginPercent(percent)
