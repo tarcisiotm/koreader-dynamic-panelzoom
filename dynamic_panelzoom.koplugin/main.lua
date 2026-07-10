@@ -13,6 +13,7 @@ local util = require("util")
 local json = require("json")
 local DataStorage = require("datastorage")
 local ConfirmBox = require("ui/widget/confirmbox")
+local Event = require("ui/event")
 
 local USER_SETTINGS = {
     reading_direction_override = "ltr", -- User override for reading direction (rtl/ltr)
@@ -1509,6 +1510,9 @@ function PanelZoomIntegration:displayCurrentPanel()
         onHold = function()
             self:switchToZoomMode()
         end,
+        onTwoFingerTap = function()
+            return self:toggleRotation()
+        end,
     }
     
     self._current_imgviewer = panel_viewer
@@ -1530,6 +1534,30 @@ function PanelZoomIntegration:displayCurrentPanel()
     end)
     
     return true -- Success, new viewer created
+end
+
+function PanelZoomIntegration:toggleRotation()
+    local current = Screen:getRotationMode()
+
+    local new_mode
+    if current == Screen.DEVICE_ROTATED_UPRIGHT then
+        new_mode = Screen.DEVICE_ROTATED_COUNTER_CLOCKWISE
+    else
+        new_mode = Screen.DEVICE_ROTATED_UPRIGHT
+    end
+
+    logger.info("Rotation:", current, "->", new_mode)
+    
+    self.ui:handleEvent(Event:new("SetRotationMode", new_mode))
+
+    -- 2. Force an immediate recalculation and repaint of the active panel
+    if self._current_imgviewer and #self.current_panels > 0 then
+        UIManager:nextTick(function()
+            self:displayCurrentPanel()
+        end)
+    end
+
+    return true
 end
 
 function PanelZoomIntegration:setStandardMarginPercent(percent)
