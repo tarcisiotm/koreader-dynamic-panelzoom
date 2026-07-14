@@ -1545,7 +1545,7 @@ function PanelZoomIntegration:toggleRotation()
 
     local new_mode
     if current == Screen.DEVICE_ROTATED_UPRIGHT then
-        new_mode = Screen.DEVICE_ROTATED_COUNTER_CLOCKWISE
+        new_mode = Screen.DEVICE_ROTATED_CLOCKWISE
     else
         new_mode = Screen.DEVICE_ROTATED_UPRIGHT
     end
