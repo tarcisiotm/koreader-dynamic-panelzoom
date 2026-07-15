@@ -105,6 +105,28 @@ function PanelViewer:setupTouchZones()
             KeyClose = { { Device.input.group.Back } },
         }
     end
+
+    self:registerTouchZones({
+        {
+            id = "panelviewer_rotate",
+            ges = "two_finger_tap",
+            screen_zone = {
+                ratio_x = 0,
+                ratio_y = 0,
+                ratio_w = 1,
+                ratio_h = 1,
+            },
+            handler = function()
+                logger.info("PanelViewer: two finger gesture triggered")
+
+                if self.onTwoFingerTap then
+                    return self.onTwoFingerTap()
+                end
+
+                return true
+            end,
+        },
+    })
 end
 
 function PanelViewer:loadImage()

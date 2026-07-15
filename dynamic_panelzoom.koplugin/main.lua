@@ -13,6 +13,7 @@ local util = require("util")
 local json = require("json")
 local DataStorage = require("datastorage")
 local ConfirmBox = require("ui/widget/confirmbox")
+local Event = require("ui/event")
 
 local USER_SETTINGS = {
     reading_direction_override = "ltr", -- User override for reading direction (rtl/ltr)
@@ -24,6 +25,7 @@ local USER_SETTINGS = {
     experimental_panel_sorting_enabled = false,
     display_full_page_before = false,   -- Show full page before showing the first panel
     display_full_page_after = false,   -- Show full page after showing the last panel
+    two_finger_rotation_enabled = false,   -- Enables rotating the panel with a two finger gesture
 }
 
 local PanelZoomIntegration = WidgetContainer:extend{
@@ -681,6 +683,15 @@ function PanelZoomIntegration:_onPageChangeComplete(new_page_no)
         UIManager.currently_scrolling = false
         -- Prevent the partial->full flash promotion counter from triggering
         UIManager:avoidFlashOnNextRepaint()
+
+        local default_rotation = Screen.DEVICE_ROTATED_UPRIGHT
+        if Screen:getRotationMode() ~= default_rotation then
+            logger.info("DynamicPanelZoom: Resetting screen rotation to portrait on page change")
+            self.ui:handleEvent(Event:new("SetRotationMode", default_rotation))
+        end
+        
+        -- Clear our custom rotation tracker so it doesn't try to auto-enforce it later
+        self.custom_rotation = nil
 
         local new_page = new_page_no or self:getSafePageNumber()
         local diff = self._page_change_diff or 1
@@ -1465,6 +1476,11 @@ function PanelZoomIntegration:displayCurrentPanel()
     
     logger.info("DynamicPanelZoom: Successfully created panel image with document settings")
 
+    -- enforces custom rotation
+    if self.custom_rotation and Screen:getRotationMode() ~= self.custom_rotation then
+        self.ui:handleEvent(Event:new("SetRotationMode", self.custom_rotation))
+    end
+
     -- Calculate panel aspect ratio for border logic
     local panel_aspect_ratio = nil
     if panel and dim then
@@ -1509,6 +1525,9 @@ function PanelZoomIntegration:displayCurrentPanel()
         onHold = function()
             self:switchToZoomMode()
         end,
+        onTwoFingerTap = function()
+            return self:toggleRotation()
+        end,
     }
     
     self._current_imgviewer = panel_viewer
@@ -1530,6 +1549,36 @@ function PanelZoomIntegration:displayCurrentPanel()
     end)
     
     return true -- Success, new viewer created
+end
+
+function PanelZoomIntegration:toggleRotation()
+    if not self.two_finger_rotation_enabled then
+        return
+    end
+    
+    local current = Screen:getRotationMode()
+
+    local new_mode
+    if current == Screen.DEVICE_ROTATED_UPRIGHT then
+        new_mode = Screen.DEVICE_ROTATED_CLOCKWISE
+    else
+        new_mode = Screen.DEVICE_ROTATED_UPRIGHT
+    end
+
+    logger.info("DynamicPanelZoom: toggleRotation from ", current, "->", new_mode)
+    
+    self.custom_rotation = new_mode
+    
+    self.ui:handleEvent(Event:new("SetRotationMode", new_mode))
+
+    -- Recalculate and repaint the active panel
+    if self._current_imgviewer and #self.current_panels > 0 then
+        UIManager:nextTick(function()
+            self:displayCurrentPanel()
+        end)
+    end
+
+    return true
 end
 
 function PanelZoomIntegration:setStandardMarginPercent(percent)
@@ -1667,6 +1716,7 @@ function PanelZoomIntegration:setupPanelZoomMenuIntegration()
                         checked_func = function() return self.display_full_page_before end,
                         callback = function()
                             self.display_full_page_before = not self.display_full_page_before
+                            self:savePluginSettings()
                         end,
                     },
                     {
@@ -1674,6 +1724,15 @@ function PanelZoomIntegration:setupPanelZoomMenuIntegration()
                         checked_func = function() return self.display_full_page_after end,
                         callback = function()
                             self.display_full_page_after = not self.display_full_page_after
+                            self:savePluginSettings()
+                        end,
+                    },
+                    {
+                        text = _("Rotate panel with two finger gesture"),
+                        checked_func = function() return self.two_finger_rotation_enabled end,
+                        callback = function()
+                            self.two_finger_rotation_enabled = not self.two_finger_rotation_enabled
+                            self:savePluginSettings()
                         end,
                     }
                 },
