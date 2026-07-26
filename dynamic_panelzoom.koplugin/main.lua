@@ -26,6 +26,8 @@ local USER_SETTINGS = {
     display_full_page_before = false,   -- Show full page before showing the first panel
     display_full_page_after = false,   -- Show full page after showing the last panel
     two_finger_rotation_enabled = false,   -- Enables rotating the panel with a two finger gesture
+    two_finger_rotation_clockwise = true,   -- Default two finger rotation direction
+    two_finger_rotation_counterclockwise = false,   -- Default two finger rotation direction
 }
 
 local PanelZoomIntegration = WidgetContainer:extend{
@@ -1567,9 +1569,16 @@ function PanelZoomIntegration:toggleRotation()
     
     local current = Screen:getRotationMode()
 
+    local direction
+    if self.two_finger_rotation_clockwise then
+        direction = Screen.DEVICE_ROTATED_CLOCKWISE
+    else
+        direction = Screen.DEVICE_ROTATED_COUNTER_CLOCKWISE
+    end
+
     local new_mode
     if current == Screen.DEVICE_ROTATED_UPRIGHT then
-        new_mode = Screen.DEVICE_ROTATED_CLOCKWISE
+        new_mode = direction
     else
         new_mode = Screen.DEVICE_ROTATED_UPRIGHT
     end
@@ -1737,12 +1746,35 @@ function PanelZoomIntegration:setupPanelZoomMenuIntegration()
                         end,
                     },
                     {
-                        text = _("Rotate panel with two finger gesture"),
-                        checked_func = function() return self.two_finger_rotation_enabled end,
-                        callback = function()
-                            self.two_finger_rotation_enabled = not self.two_finger_rotation_enabled
-                            self:savePluginSettings()
-                        end,
+                        text = _("Rotate panel with two finger gesture options"),
+                        sub_item_table = {
+                            {
+                                text = _("Rotate panel with two finger gesture"),
+                                checked_func = function() return self.two_finger_rotation_enabled end,
+                                callback = function()
+                                    self.two_finger_rotation_enabled = not self.two_finger_rotation_enabled
+                                    self:savePluginSettings()
+                                end,
+                            },
+                            {
+                                text = _("Two Finger gesture rotates clockwise"),
+                                checked_func = function() return self.two_finger_rotation_clockwise end,
+                                callback = function()
+                                    self.two_finger_rotation_clockwise = not self.two_finger_rotation_clockwise
+                                    self.two_finger_rotation_counterclockwise = not self.two_finger_rotation_clockwise
+                                    self:savePluginSettings()
+                                end,
+                            },
+                            {
+                                text = _("Two Finger gesture rotates counter-clockwise"),
+                                checked_func = function() return self.two_finger_rotation_counterclockwise end,
+                                callback = function()
+                                    self.two_finger_rotation_counterclockwise = not self.two_finger_rotation_counterclockwise
+                                    self.two_finger_rotation_clockwise = not self.two_finger_rotation_counterclockwise
+                                    self:savePluginSettings()
+                                end,
+                            }
+                        }
                     }
                 },
                 separator = true,
