@@ -49,6 +49,14 @@ local PanelViewer = InputContainer:extend{
 }
 
 function PanelViewer:init()
+    -- Ensure the refresh region always covers the full screen, so a "full"/
+    -- "flashui" refresh clears content from the previous panel (avoids ghosting)
+    self.dimen = Geom:new{
+        x = 0, y = 0,
+        w = Screen:getWidth(),
+        h = Screen:getHeight()
+    }
+
     -- Initialize touch zones for navigation
     self:setupTouchZones()
     

@@ -14,6 +14,7 @@ local json = require("json")
 local DataStorage = require("datastorage")
 local ConfirmBox = require("ui/widget/confirmbox")
 local Event = require("ui/event")
+local Blitbuffer = require("ffi/blitbuffer")
 
 local USER_SETTINGS = {
     reading_direction_override = "ltr", -- User override for reading direction (rtl/ltr)
@@ -28,6 +29,9 @@ local USER_SETTINGS = {
     two_finger_rotation_enabled = false,   -- Enables rotating the panel with a two finger gesture
     two_finger_rotation_clockwise = true,   -- Default two finger rotation direction
     two_finger_rotation_counterclockwise = false,   -- Default two finger rotation direction
+    refresh_type_ui = true, -- Default refresh type, avoid flashing
+    refresh_type_flash_ui = false, -- Flash UI refresh Type (slower)
+    refresh_type_full = false, -- Full refresh type (slowest)
 }
 
 local PanelZoomIntegration = WidgetContainer:extend{
@@ -38,6 +42,7 @@ local PanelZoomIntegration = WidgetContainer:extend{
     last_page_seen = -1,
     tap_navigation_enabled = true,
     tap_zones = { left = 0.3, right = 0.7 },
+    refresh_mode = "ui", -- default refresh mode that avoid overly flashing the screen
     _panel_cache = {}, -- Cache JSON per document
     _preloaded_image = nil, -- Pre-rendered next panel
     _preloaded_panel_index = nil, -- Index of preloaded panel
@@ -88,6 +93,8 @@ function PanelZoomIntegration:loadSavedSettings()
             self[key] = default_value
         end
     end
+
+    self:getRefreshModeFromSettings()
 end
 
 function PanelZoomIntegration:resetSettingsToDefault()
@@ -110,6 +117,8 @@ function PanelZoomIntegration:resetSettingsToDefault()
                 text = _("Restored default settings successfully!"),
                 timeout = 2,
             })
+
+            self:getRefreshModeFromSettings()
         end,
         cancel_callback = function()
             UIManager:close(reset_dialog)
@@ -484,8 +493,8 @@ function PanelZoomIntegration:displayPreloadedPanel()
     logger.info(string.format("PanelZoom: Updated custom position for preloaded panel - x:%d, y:%d (image:%dx%d, screen:%dx%d)", 
         custom_position.x, custom_position.y, image_w, image_h, screen_w, screen_h))
     
-    self._current_imgviewer:update()
-    
+    self:refreshPanelViewer(self._current_imgviewer)
+
     -- Clear preloaded data after use
     self._preloaded_image = nil
     self._preloaded_panel_index = nil
@@ -1508,7 +1517,7 @@ function PanelZoomIntegration:displayCurrentPanel()
         self._current_imgviewer:updateCustomPosition(custom_position)
         self._current_imgviewer:updatePanelAspectRatio(panel_aspect_ratio)
         self._current_imgviewer:updateImage(image)
-        self._current_imgviewer:update()
+        self:refreshPanelViewer(self._current_imgviewer)
         
         -- Start preloading the next panel after a short delay
         UIManager:scheduleIn(0.2, function()
@@ -1545,13 +1554,7 @@ function PanelZoomIntegration:displayCurrentPanel()
     logger.info("DynamicPanelZoom: Showing new PanelViewer")
     UIManager:show(panel_viewer)
     
-    -- Use "ui" refresh for initial panel display to avoid E-Ink flash.
-    -- "flashui" would cause a visible full-screen flash on E-Ink devices.
-    -- Dithering is still enabled for image quality on grayscale E-Ink displays.
-    UIManager:setDirty(panel_viewer, function()
-        return "ui", panel_viewer.dimen, Screen.sw_dithering  -- Enable dithering for E-ink
-    end)
-    
+    self:refreshPanelViewer(panel_viewer)
     logger.info("DynamicPanelZoom: New PanelViewer shown with flash-free refresh")
     
     -- Start preloading the next panel after a short delay
@@ -1560,6 +1563,39 @@ function PanelZoomIntegration:displayCurrentPanel()
     end)
     
     return true -- Success, new viewer created
+end
+
+-- Use "ui" refresh for initial panel display to avoid E-Ink flash.
+-- "flashui" / "full" would cause a visible full-screen flash on E-Ink devices.
+-- Dithering is still enabled for image quality on grayscale E-Ink displays.
+-- Directly clear the screen to a flat gray and flash it, bypassing
+-- UIManager's dirty-widget queue entirely, so the e-ink clear is
+-- guaranteed to happen before the new panel is painted (fixes ghosting)
+function PanelZoomIntegration:refreshPanelViewer(panel_viewer)
+    if not panel_viewer then return end
+
+    local full_region = Geom:new{
+        x = 0, y = 0,
+        w = Screen:getWidth(),
+        h = Screen:getHeight(),
+    }
+
+    -- direct hardware clear-flash (bypasses UIManager)
+    if Screen.bb then
+        Screen.bb:paintRect(full_region.x, full_region.y, full_region.w, full_region.h,
+            Blitbuffer.Color8(128))
+        if self.refresh_mode == "full" and Screen.refreshFull then
+            Screen:refreshFull(full_region.x, full_region.y, full_region.w, full_region.h)
+        elseif self.refresh_mode == "flashui" and Screen.refreshFlashUI then
+            Screen:refreshFlashUI(full_region.x, full_region.y, full_region.w, full_region.h)
+        end
+        -- "ui" mode: skip the direct clear-flash entirely
+    end
+
+    -- normal widget draw + refresh with the actual new panel content
+    UIManager:setDirty(panel_viewer, function()
+        return "ui", full_region, Screen.sw_dithering
+    end)
 end
 
 function PanelZoomIntegration:toggleRotation()
@@ -1837,9 +1873,64 @@ function PanelZoomIntegration:setupPanelZoomMenuIntegration()
                 },
                 separator = true,
             })
+
+            -- Add Panel Refresh options
+            table.insert(menu_items, 5, {
+                text = _("Panel Refresh settings"),
+                sub_item_table = {
+                    {
+                        text = _("UI (Default)"),
+                        checked_func = function() return self.refresh_type_ui end,
+                        callback = function() 
+                            self.refresh_type_ui = true
+                            self.refresh_type_flash_ui = false
+                            self.refresh_type_full = false
+                            self:setRefreshMode("ui")
+                            self:savePluginSettings()
+                        end,
+                    },
+                    {
+                        text = _("Flash UI - Less Ghosting"),
+                        checked_func = function() return self.refresh_type_flash_ui end,
+                        callback = function() 
+                            self.refresh_type_ui = false
+                            self.refresh_type_flash_ui = true
+                            self.refresh_type_full = false
+                            self:setRefreshMode("flashui")
+                            self:savePluginSettings()
+                        end,
+                    },
+                    {
+                        text = _("Full Refresh - Slowest"),
+                        checked_func = function() return self.refresh_type_full end,
+                        callback = function() 
+                            self.refresh_type_ui = false
+                            self.refresh_type_flash_ui = false
+                            self.refresh_type_full = true
+                            self:setRefreshMode("full")
+                            self:savePluginSettings()
+                        end,
+                    },
+                    {
+                        text = _("Information about these options."),
+                        keep_menu_open = true,
+                        callback = function()
+                            UIManager:show(InfoMessage:new{
+                                text = _([[
+UI (Default): Fastest, no screen flash. May leave faint ghosting from the previous panel on some devices.
+
+Flash UI - Less Ghosting: Adds a quick full-screen flash before drawing the new panel, clearing most ghosting with only a small speed cost.
+
+Full Refresh - Slowest: The strongest screen clear. Eliminates ghosting completely but is the slowest option.]]),
+                            })
+                        end,
+                    },
+                },
+                separator = true,
+            })
             
             -- Add Experimental features
-            table.insert(menu_items, 5, {
+            table.insert(menu_items, 6, {
                 text = _("Experimental features"),
                 sub_item_table = {
                     {
@@ -1869,6 +1960,21 @@ function PanelZoomIntegration:setupPanelZoomMenuIntegration()
         end
         
         logger.info("DynamicPanelZoom: Integrated reading direction options into panel zoom menu")
+    end
+end
+
+function PanelZoomIntegration:setRefreshMode(refresh_mode)
+    self.refresh_mode = refresh_mode;
+end
+
+function PanelZoomIntegration:getRefreshModeFromSettings()
+    if self.refresh_type_full then
+        self:setRefreshMode("full")
+    elseif self.refresh_type_flash_ui then
+        self:setRefreshMode("flashui")
+    else
+        -- Default to "ui" (covers refresh_type_ui = true, or nothing set yet)
+        self:setRefreshMode("ui")
     end
 end
 
