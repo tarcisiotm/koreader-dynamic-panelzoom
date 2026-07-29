@@ -183,10 +183,19 @@ function PanelZoomIntegration:checkAndIntegratePanelZoom()
     local doc_path = self.ui.document.file
     if not doc_path then return end
     
-    -- Dynamic Panel Zoom is always available, we just integrate it
-    self._json_available = true -- we fake it to keep the integration flag happy
+    local dir, filename = util.splitFilePathName(doc_path)
+    local base_name = filename:match("(.+)%..+$") or filename
+    local json_path = dir .. "/" .. base_name .. ".json"
+    
+    if util.pathExists(json_path) then
+        self._json_available = true
+        logger.info("DynamicPanelZoom: Found companion JSON at " .. json_path)
+    else
+        self._json_available = false
+        logger.info("DynamicPanelZoom: No JSON file found; using dynamic Leptonica fallback mode")
+    end
+    
     self:integrateWithPanelZoom()
-    logger.info("DynamicPanelZoom: Auto-integration enabled")
 end
 
 -- Integrate with built-in Panel Zoom
@@ -821,34 +830,112 @@ function PanelZoomIntegration:importToggleZoomPanels()
     
     local page_idx = self:getSafePageNumber()
     local reading_dir = self:getEffectiveReadingDirection()
+    local dir, filename = util.splitFilePathName(doc_path)
+    local base_name = filename:match("(.+)%..+$") or filename
     
-    -- The cache key must now include reading_dir, otherwise flipping direction
-    -- uses the old cached layout where panel 1 meant LTR/top-left instead of RTL/top-right.
+    -- Initialize cache structure
     if not self._panel_cache[doc_path] then self._panel_cache[doc_path] = {} end
     if not self._panel_cache[doc_path][reading_dir] then self._panel_cache[doc_path][reading_dir] = {} end
     
-    -- Check if we already have panels for this page cached in memory FOR THIS READING DIR
+    -- 1. Check in-memory cache first
     if self._panel_cache[doc_path][reading_dir][page_idx] then
         logger.info(string.format("DynamicPanelZoom: Using cached %s panels for page %d", reading_dir, page_idx))
         self.current_panels = self._panel_cache[doc_path][reading_dir][page_idx]
         return
     end
-    
-    logger.info(string.format("DynamicPanelZoom: Analyzing page %d for %s panels dynamically", page_idx, reading_dir))
-    if self.experimental_panel_sorting_enabled then
-        self.current_panels = self:analyzePageForPanelsExperimental(page_idx)
-    else
-        self.current_panels = self:analyzePageForPanels(page_idx)
+
+    local loaded_panels = nil
+
+    -- 2. Try loading from JSON file if available
+    local json_path = dir .. "/" .. base_name .. ".json"
+    if util.pathExists(json_path) then
+        local f = io.open(json_path, "r")
+        if f then
+            local content = f:read("*all")
+            f:close()
+            
+            local ok, data = pcall(json.decode, content)
+            if ok and data then
+                -- Support for chapter-indexed JSON architecture
+                if data.chapters and type(data.chapters) == "table" and #data.chapters > 0 then
+                    loaded_panels = self:loadChapterBasedPanels(data, dir, page_idx)
+                -- Support for standard array structure
+                elseif data.pages and type(data.pages) == "table" then
+                    for _, page_data in ipairs(data.pages) do
+                        if page_data.page == page_idx then
+                            loaded_panels = page_data.panels
+                            logger.info(string.format("DynamicPanelZoom: Loaded %d panels from JSON for page %d", #loaded_panels, page_idx))
+                            break
+                        end
+                    end
+                end
+
+                -- Fallback lookup for key-value dictionary formats
+                if not loaded_panels and data.pages then
+                    loaded_panels = data.pages[filename] or data.pages[tostring(page_idx)] or data.pages[page_idx]
+                end
+
+                if not loaded_panels and data.panels then
+                    loaded_panels = data.panels
+                end
+            end
+        end
     end
+
+    -- 3. Fallback to Leptonica dynamic extraction if JSON was missing or yielded no panels
+    if not loaded_panels or #loaded_panels == 0 then
+        logger.info(string.format("DynamicPanelZoom: Running Leptonica detection for page %d (%s)", page_idx, reading_dir))
+        if self.experimental_panel_sorting_enabled then
+            loaded_panels = self:analyzePageForPanelsExperimental(page_idx)
+        else
+            loaded_panels = self:analyzePageForPanels(page_idx)
+        end
+    end
+
+    self.current_panels = loaded_panels or {}
     
-    -- Cache it for this document and page and direction
+    -- Store results in local cache
     self._panel_cache[doc_path][reading_dir][page_idx] = self.current_panels
     
     if #self.current_panels > 0 then
-        logger.info(string.format("DynamicPanelZoom: SUCCESS! Detected %d panels for page %d (%s)", #self.current_panels, page_idx, reading_dir))
+        logger.info(string.format("DynamicPanelZoom: Ready with %d panels for page %d", #self.current_panels, page_idx))
     else
         logger.warn(string.format("DynamicPanelZoom: No panels detected on page %d", page_idx))
     end
+end
+
+function PanelZoomIntegration:loadChapterBasedPanels(master_data, dir, page_idx)
+    local current_page_in_chapter = page_idx
+    local target_chapter = nil
+    
+    for _, chapter in ipairs(master_data.chapters) do
+        if current_page_in_chapter <= chapter.total_pages then
+            target_chapter = chapter
+            break
+        else
+            current_page_in_chapter = current_page_in_chapter - chapter.total_pages
+        end
+    end
+    
+    if not target_chapter then return nil end
+    
+    local chapter_json_path = dir .. "/" .. target_chapter.json_file
+    local chapter_file = io.open(chapter_json_path, "r")
+    if not chapter_file then return nil end
+    
+    local chapter_content = chapter_file:read("*all")
+    chapter_file:close()
+    
+    local ok, chapter_data = pcall(json.decode, chapter_content)
+    if not ok or not chapter_data or not chapter_data.pages then return nil end
+    
+    for _, page_data in ipairs(chapter_data.pages) do
+        if page_data.page == current_page_in_chapter then
+            return page_data.panels
+        end
+    end
+    
+    return nil
 end
 
 function PanelZoomIntegration:analyzePageForPanels(pageno)
