@@ -96,7 +96,13 @@ function PanelViewer:setupTouchZones()
                     h = screen_height
                 }
             }
-        }
+        },
+        Spread = {
+            GestureRange:new{
+                ges = "spread",
+                range = Geom:new{ x = 0, y = 0, w = screen_width, h = screen_height }
+            }
+        },
     }
 
     -- Register hardware keys (Boox, Kindle, Kobo, etc.).
@@ -266,6 +272,14 @@ end
 function PanelViewer:onKeyClose()
     logger.info("PanelViewer: Back key received, closing viewer")
     if self.onClose then self.onClose() end
+    return true
+end
+
+function PanelViewer:onSpread(_, ges)
+    logger.info("PanelViewer: Spread gesture detected")
+    if self.onSpreadZoom then
+        self.onSpreadZoom(ges)
+    end
     return true
 end
 

@@ -22,6 +22,7 @@ local USER_SETTINGS = {
     standard_margin_percent = 0.0, -- Default 0% extra margin for standard panel-by-panel navigation
     show_adjacent_panels = true, -- Show adjacent content (Smart Fill)
     zoom_initial_scale = 1.2, -- Default 1.2x initial software scale for the free zoom mode
+    zoom_spread_gesture_enabled = true,
     panelzoom_tap_forward_zone = "auto", -- auto, left, or right
     experimental_panel_sorting_enabled = false,
     display_full_page_before = false,   -- Show full page before showing the first panel
@@ -1489,6 +1490,12 @@ function PanelZoomIntegration:displayCurrentPanel()
     
     -- Create new image for the panel with document settings
     local image, rotate, custom_position = self:drawPagePartWithSettings(page, rect, center, panel, dim)
+    self._current_panel_screen_rect = {
+        x = custom_position.x,
+        y = custom_position.y,
+        w = image:getWidth(),
+        h = image:getHeight(),
+    }
     if not image then 
         logger.warn("DynamicPanelZoom: Could not draw page part")
         return false 
@@ -1547,6 +1554,9 @@ function PanelZoomIntegration:displayCurrentPanel()
         end,
         onTwoFingerTap = function()
             return self:toggleRotation()
+        end,
+        onSpreadZoom = function(ges)
+            self:switchToZoomModeAtBox(ges)
         end,
     }
     
@@ -1631,6 +1641,144 @@ function PanelZoomIntegration:toggleRotation()
             self:displayCurrentPanel()
         end)
     end
+
+    return true
+end
+
+function PanelZoomIntegration:switchToZoomModeAtBox(ges)
+    if self._zoom_overlay_active then return false end
+
+    local panel = self.current_panels[self.current_panel_index]
+    if not panel or not ges or not ges.pos or not ges.span then
+        return false
+    end
+
+    local page = self:getSafePageNumber()
+    local dim = self.ui.document:getNativePageDimensions(page) or
+                self.ui.document:getPageSize(page)
+    if not dim then
+        return false
+    end
+
+    local screen_rect = self._current_panel_screen_rect
+    if not screen_rect or screen_rect.w == 0 or screen_rect.h == 0 then
+        return self:switchToZoomMode()
+    end
+
+    local screen_w = Screen:getWidth()
+    local screen_h = Screen:getHeight()
+
+    -- Selection rectangle (same aspect ratio as the screen)
+    local aspect = screen_w / screen_h
+
+    local box_h = ges.span
+    local box_w = box_h * aspect
+
+    local center = ges.end_pos or ges.pos
+
+    local box_x0 = center.x - box_w / 2
+    local box_y0 = center.y - box_h / 2
+    local box_x1 = center.x + box_w / 2
+    local box_y1 = center.y + box_h / 2
+
+    -- Snap near screen edges
+    local EDGE_THRESHOLD = 0.05
+
+    if box_x0 < screen_w * EDGE_THRESHOLD then box_x0 = 0 end
+    if box_y0 < screen_h * EDGE_THRESHOLD then box_y0 = 0 end
+    if box_x1 > screen_w * (1 - EDGE_THRESHOLD) then box_x1 = screen_w end
+    if box_y1 > screen_h * (1 - EDGE_THRESHOLD) then box_y1 = screen_h end
+
+    -- Convert to panel-relative coordinates
+    local rel_x0 = math.max(0, math.min(1, (box_x0 - screen_rect.x) / screen_rect.w))
+    local rel_y0 = math.max(0, math.min(1, (box_y0 - screen_rect.y) / screen_rect.h))
+    local rel_x1 = math.max(0, math.min(1, (box_x1 - screen_rect.x) / screen_rect.w))
+    local rel_y1 = math.max(0, math.min(1, (box_y1 - screen_rect.y) / screen_rect.h))
+
+    local box = {
+        x = panel.x * dim.w + rel_x0 * panel.w * dim.w,
+        y = panel.y * dim.h + rel_y0 * panel.h * dim.h,
+        w = (rel_x1 - rel_x0) * panel.w * dim.w,
+        h = (rel_y1 - rel_y0) * panel.h * dim.h,
+    }
+
+    if box.w < 10 or box.h < 10 then
+        return false
+    end
+
+    -- Render full panel
+
+    local margin = 0 -- alternatively self.zoom_margin_percent or EDGE_THRESHOLD (0.05)
+    local render_rect = self:panelToRect(panel, dim, margin)
+    local panel_center = self:calculatePanelCenter(panel, dim)
+
+    local max_buffer_w = screen_w * 2.5
+    local max_buffer_h = screen_h * 2.5
+
+    local safe_scale = math.min(
+        max_buffer_w / render_rect.w,
+        max_buffer_h / render_rect.h,
+        3.5
+    )
+
+    local expanded_image = self:drawPagePartWithSettings(
+        page,
+        render_rect,
+        panel_center,
+        panel,
+        dim,
+        safe_scale
+    )
+
+    if not expanded_image then
+        return false
+    end
+
+    -- Initial framing
+    -- Size of the rendered image in pixels
+    local rendered_w = render_rect.w * safe_scale
+    local rendered_h = render_rect.h * safe_scale
+
+    -- Size of the selected box inside that rendered image
+    local rendered_box_w = box.w * safe_scale
+    local rendered_box_h = box.h * safe_scale
+
+    -- Initial ImageViewer scale
+    local initial_scale_factor = math.min(
+        screen_w / rendered_box_w,
+        screen_h / rendered_box_h
+    )
+
+    local ok, ImageViewer = pcall(require, "ui/widget/imageviewer")
+    if not ok then
+        return false
+    end
+
+    self._zoom_overlay_active = true
+
+    local box_cx = box.x + box.w / 2
+    local box_cy = box.y + box.h / 2
+
+    local image_viewer = ImageViewer:new{
+        image = expanded_image,
+        image_disposable = false,
+        fullscreen = true,
+        with_title_bar = false,
+        buttons_visible = true,
+        scale_factor = initial_scale_factor,
+        d_center_x_ratio = (box_cx - render_rect.x) / render_rect.w,
+        _center_y_ratio = (box_cy - render_rect.y) / render_rect.h,
+    }
+
+    local original_onClose = image_viewer.onClose
+    image_viewer.onClose = function(this, ...)
+        self._zoom_overlay_active = false
+        if original_onClose then
+            return original_onClose(this, ...)
+        end
+    end
+
+    UIManager:show(image_viewer)
 
     return true
 end
@@ -1818,8 +1966,16 @@ function PanelZoomIntegration:setupPanelZoomMenuIntegration()
             
             -- Add Free Zoom options
             table.insert(menu_items, 4, {
-                text = _("Hold-to-Zoom settings"),
+                text = _("Zoom settings"),
                 sub_item_table = {
+                    {
+                        text = _("Spread-to-Zoom"),
+                        checked_func = function() return self.zoom_spread_gesture_enabled end,
+                        callback = function()
+                            self.zoom_spread_gesture_enabled = not self.zoom_spread_gesture_enabled
+                            self:savePluginSettings()
+                        end,
+                    },
                     {
                         text = _("Hold-to-Zoom padding"),
                         sub_item_table = {
