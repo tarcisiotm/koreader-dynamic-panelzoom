@@ -1,5 +1,13 @@
 # KOReader Dynamic Panel Zoom
 
+This fork modifies the original plugin to add more features such as:
+
+- Optional display of the full page before the first panel and after the last panel
+- Persistent settings
+- Two-finger gesture to rotate the current panel (resets after turning the page)
+- Two-finger spread gesture to focus on the frame defined by where the fingers initially landed
+- Configurable full page refresh options (based on the excellent work by [darkpf](https://github.com/darkpf/koreader-dynamic-panel-plus/) in their fork)
+
 A KOReader plugin that automatically detects and displays comic and manga panels one by one for a seamless reading experience on E-Ink devices. 
 
 No pre-processing, external scripts, or JSON files required—it analyzes the page on the fly.
