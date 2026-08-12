@@ -1766,7 +1766,7 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
         with_title_bar = false,
         buttons_visible = true,
         scale_factor = initial_scale_factor,
-        d_center_x_ratio = (box_cx - render_rect.x) / render_rect.w,
+        _center_x_ratio = (box_cx - render_rect.x) / render_rect.w,
         _center_y_ratio = (box_cy - render_rect.y) / render_rect.h,
     }
 
