@@ -1,9 +1,8 @@
-```bat
 @echo off
 setlocal
 
-set "SRC=%~dp0"
-if "%SRC:~-1%"=="\" set "SRC=%SRC:~0,-1%"
+:: Set the source directory to dynamic_panelzoom.koplugin inside the script's current folder
+set "SRC=%~dp0dynamic_panelzoom.koplugin"
 
 set "DEST=E:\.adds\koreader\plugins\dynamic_panelzoom.koplugin"
 
@@ -21,7 +20,7 @@ echo.
 echo Copying files...
 echo.
 
-robocopy "%SRC%" "%DEST%" /E /XF "%~nx0" /NJH /NJS /NDL /NC /NS
+robocopy "%SRC%" "%DEST%" /E /NJH /NJS /NDL /NC /NS
 set "RC=%ERRORLEVEL%"
 
 echo.
@@ -45,4 +44,3 @@ echo Press any key to close this window...
 pause >nul
 
 exit
-```
