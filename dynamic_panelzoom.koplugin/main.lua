@@ -1743,10 +1743,27 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
     local rendered_box_w = box.w * safe_scale
     local rendered_box_h = box.h * safe_scale
 
+    -- Safety checks for accidental tiny spread gestures
+    if rendered_box_w <= 0 or rendered_box_h <= 0 then
+        logger.warn("DynamicPanelZoom: Invalid rendered zoom box")
+        return false
+    end
+
+    local MIN_ZOOM_BOX_SIZE = 80
+    if rendered_box_w < MIN_ZOOM_BOX_SIZE or rendered_box_h < MIN_ZOOM_BOX_SIZE then
+        logger.info("DynamicPanelZoom: Spread gesture too small, ignoring")
+        return false
+    end
+
     -- Initial ImageViewer scale
     local initial_scale_factor = math.min(
         screen_w / rendered_box_w,
         screen_h / rendered_box_h
+    )
+
+    initial_scale_factor = math.max(
+        0.25,
+        math.min(initial_scale_factor, 8.0)
     )
 
     local ok, ImageViewer = pcall(require, "ui/widget/imageviewer")
@@ -1759,6 +1776,10 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
     local box_cx = box.x + box.w / 2
     local box_cy = box.y + box.h / 2
 
+    local center_x_ratio = math.max(0, math.min(1, (box_cx - render_rect.x) / render_rect.w))
+
+    local center_y_ratio = math.max(0, math.min(1, (box_cy - render_rect.y) / render_rect.h))
+
     local image_viewer = ImageViewer:new{
         image = expanded_image,
         image_disposable = false,
@@ -1766,8 +1787,8 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
         with_title_bar = false,
         buttons_visible = true,
         scale_factor = initial_scale_factor,
-        _center_x_ratio = (box_cx - render_rect.x) / render_rect.w,
-        _center_y_ratio = (box_cy - render_rect.y) / render_rect.h,
+        _center_x_ratio = center_x_ratio,
+        _center_y_ratio = center_y_ratio,
     }
 
     local original_onClose = image_viewer.onClose
