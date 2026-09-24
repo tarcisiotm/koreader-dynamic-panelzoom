@@ -1558,6 +1558,7 @@ function PanelZoomIntegration:displayCurrentPanel()
         onSpreadZoom = function(ges)
             self:switchToZoomModeAtBox(ges)
         end,
+        onProgressTap = function() self:showProgressTooltip() end,
     }
     
     self._current_imgviewer = panel_viewer
@@ -2153,6 +2154,22 @@ function PanelZoomIntegration:getRefreshModeFromSettings()
         -- Default to "ui" (covers refresh_type_ui = true, or nothing set yet)
         self:setRefreshMode("ui")
     end
+end
+
+function PanelZoomIntegration:showProgressTooltip()
+    local doc = self.ui.document
+    if not doc or not doc.getPageCount then return end
+
+    local total = doc:getPageCount()
+    if not total or total <= 0 then return end
+
+    local current_page = self:getSafePageNumber()
+    local percent = math.floor((current_page / total) * 100 + 0.5)
+
+    UIManager:show(InfoMessage:new{
+        text = string.format(_("%d%% complete (page %d of %d)"), percent, current_page, total),
+        timeout = 1.5,
+    })
 end
 
 -- Restore original panel zoom menu when plugin is disabled

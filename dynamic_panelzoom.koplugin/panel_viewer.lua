@@ -140,6 +140,17 @@ function PanelViewer:setupTouchZones()
                 return true
             end,
         },
+        {
+            id = "panelviewer_progress_tap",
+            ges = "tap",
+            screen_zone = { ratio_x = 0.85, ratio_y = 0, ratio_w = 0.15, ratio_h = 0.1 },
+            handler = function()
+                if self.onProgressTap then
+                    self.onProgressTap()
+                end
+                return true
+            end,
+        },
     })
 end
 
