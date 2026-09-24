@@ -33,6 +33,7 @@ local USER_SETTINGS = {
     refresh_type_ui = true, -- Default refresh type, avoid flashing
     refresh_type_flash_ui = false, -- Flash UI refresh Type (slower)
     refresh_type_full = false, -- Full refresh type (slowest)
+    progress_tap_enabled = false, -- Shows a tooltip with the current book progress
 }
 
 local PanelZoomIntegration = WidgetContainer:extend{
@@ -1558,6 +1559,7 @@ function PanelZoomIntegration:displayCurrentPanel()
         onSpreadZoom = function(ges)
             self:switchToZoomModeAtBox(ges)
         end,
+        progress_tap_enabled = self.progress_tap_enabled,
         onProgressTap = function() self:showProgressTooltip() end,
     }
     
@@ -2107,8 +2109,25 @@ Full Refresh - Slowest: The strongest screen clear. Eliminates ghosting complete
                 separator = true,
             })
             
-            -- Add Experimental features
+            -- Add other settings
             table.insert(menu_items, 6, {
+                text = _("Other Settings"),
+                sub_item_table = {
+                    {
+                        text = _("Show progress on top right tap"),
+                        checked_func = function() return self.progress_tap_enabled end,
+                        callback = function()
+                            self.progress_tap_enabled = not self.progress_tap_enabled
+                            logger.info("DynamicPanelZoom: Progress Tap Enabled to " .. tostring(self.progress_tap_enabled))
+                            self:savePluginSettings()
+                        end,
+                    },
+                },
+                separator = true,
+            })
+
+            -- Add Experimental features
+            table.insert(menu_items, 7, {
                 text = _("Experimental features"),
                 sub_item_table = {
                     {
@@ -2126,7 +2145,7 @@ Full Refresh - Slowest: The strongest screen clear. Eliminates ghosting complete
             })
 
             -- Add Reset defaults option
-            table.insert(menu_items, 6, {
+            table.insert(menu_items, 8, {
                 text = _("Reset PanelZoom settings to default"),
                 callback = function()
                     self:resetSettingsToDefault()

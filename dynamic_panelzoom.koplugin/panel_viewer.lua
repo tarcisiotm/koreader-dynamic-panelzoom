@@ -145,10 +145,14 @@ function PanelViewer:setupTouchZones()
             ges = "tap",
             screen_zone = { ratio_x = 0.85, ratio_y = 0, ratio_w = 0.15, ratio_h = 0.1 },
             handler = function()
+                if not self.progress_tap_enabled then
+                    return false -- not handled: let it fall through to normal tap navigation
+                end
                 if self.onProgressTap then
                     self.onProgressTap()
+                    return true
                 end
-                return true
+                return false -- not handled: let it fall through to normal tap navigation
             end,
         },
     })
