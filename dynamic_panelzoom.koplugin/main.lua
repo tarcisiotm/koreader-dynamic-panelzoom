@@ -842,15 +842,17 @@ function PanelZoomIntegration:importToggleZoomPanels()
     else
         self.current_panels = self:analyzePageForPanels(page_idx)
     end
-    
-    -- Cache it for this document and page and direction
-    self._panel_cache[doc_path][reading_dir][page_idx] = self.current_panels
-    
+
     if #self.current_panels > 0 then
         logger.info(string.format("DynamicPanelZoom: SUCCESS! Detected %d panels for page %d (%s)", #self.current_panels, page_idx, reading_dir))
     else
-        logger.warn(string.format("DynamicPanelZoom: No panels detected on page %d", page_idx))
+        -- No panels detected: treat the whole page as a single panel so the viewer stays open
+        logger.warn(string.format("DynamicPanelZoom: No panels detected on page %d, using full page as panel", page_idx))
+        self.current_panels = { { x = 0, y = 0, w = 1, h = 1 } }
     end
+
+    -- Cache it for this document and page and direction
+    self._panel_cache[doc_path][reading_dir][page_idx] = self.current_panels
 end
 
 function PanelZoomIntegration:analyzePageForPanels(pageno)
