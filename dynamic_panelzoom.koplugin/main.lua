@@ -728,7 +728,7 @@ function PanelZoomIntegration:_onPageChangeComplete(new_page_no)
             self.current_panel_index = (diff > 0) and 1 or #self.current_panels
             self:displayCurrentPanel()
         else
-            UIManager:show(InfoMessage:new{ text = _("No panels on this page"), timeout = 1 })
+            UIManager:show(InfoMessage:new{ text = _("DynamicPanelZoom: No panels available after page change, closing viewer"), timeout = 1 })
             self:closeViewer()
         end
 
