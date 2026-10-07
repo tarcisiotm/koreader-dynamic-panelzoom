@@ -12,7 +12,8 @@ A fork of [koreader-dynamic-panelzoom](https://github.com/JorgeTheFox/koreader-d
 - Tap zone in the top-right corner to show reading progress (toggleable in settings)
 
 ## Fixed
-- Fixed panel reading order on pages with uneven panel heights (e.g. one tall panel beside two stacked ones).
+- Pages with no detected panels no longer exit the plugin
+- Fixed panel reading order on pages with uneven panel heights (e.g. one tall panel beside two stacked ones)
 
 # KOReader Dynamic Panel Zoom
 
