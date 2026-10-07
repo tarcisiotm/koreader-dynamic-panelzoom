@@ -855,6 +855,77 @@ function PanelZoomIntegration:importToggleZoomPanels()
     self._panel_cache[doc_path][reading_dir][page_idx] = self.current_panels
 end
 
+-- Splits panels wherever there is an empty gap (gutter) that no panel crosses.
+
+-- To split into rows (top to bottom), call with pos = "y", size = "h".
+-- To split into columns (left to right), call with pos = "x", size = "w".
+
+-- Returns a list of groups, each group being a list of panels.
+-- Groups are ordered top-to-bottom (rows) or left-to-right (columns).
+local function splitByGutters(boxes, pos, size)
+    local tolerance = 0.01 -- allow tiny overlaps (e.g. bleeding art) to still count as a gutter
+    local sorted = {}
+    for i, box in ipairs(boxes) do sorted[i] = box end
+    table.sort(sorted, function(a, b) return a[pos] < b[pos] end)
+
+    local groups = {}
+    local current, current_end = nil, nil
+    for _, box in ipairs(sorted) do
+        if current and box[pos] < current_end - tolerance then
+            table.insert(current, box)
+            current_end = math.max(current_end, box[pos] + box[size])
+        else
+            current = { box }
+            current_end = box[pos] + box[size]
+            table.insert(groups, current)
+        end
+    end
+    return groups
+end
+
+-- Order panels using a recursive XY-cut: split the page into horizontal bands,
+-- split each band into columns ordered by reading direction, and recurse.
+-- This keeps stacked and nested panels together in reading order.
+function PanelZoomIntegration:sortPanelsByReadingOrder(panels)
+    local is_rtl = self:getEffectiveReadingDirection() == "rtl"
+    local ordered = {}
+
+    local function visit(boxes)
+        if #boxes <= 1 then
+            if boxes[1] then table.insert(ordered, boxes[1]) end
+            return
+        end
+
+        local rows = splitByGutters(boxes, "y", "h")
+        if #rows > 1 then
+            for _, row in ipairs(rows) do visit(row) end
+            return
+        end
+
+        local cols = splitByGutters(boxes, "x", "w")
+        if #cols > 1 then
+            if is_rtl then
+                for i = #cols, 1, -1 do visit(cols[i]) end
+            else
+                for _, col in ipairs(cols) do visit(col) end
+            end
+            return
+        end
+
+        -- No clean gutter in either direction (overlapping panels): fall back to top-to-bottom,
+        -- then by reading direction
+        table.sort(boxes, function(a, b)
+            if math.abs(a.y - b.y) > 0.02 then return a.y < b.y end
+            if is_rtl then return a.x + a.w > b.x + b.w end
+            return a.x < b.x
+        end)
+        for _, box in ipairs(boxes) do table.insert(ordered, box) end
+    end
+
+    visit(panels)
+    return ordered
+end
+
 function PanelZoomIntegration:analyzePageForPanels(pageno)
     local ffi = require("ffi")
     local leptonica = ffi.loadlib("leptonica", "6")
@@ -977,24 +1048,7 @@ function PanelZoomIntegration:analyzePageForPanels(pageno)
     if kc.free then kc:free() end
     
     -- Sort panels based on reading direction (Manga TR->BL)
-    local effective_dir = self:getEffectiveReadingDirection()
-    table.sort(panels, function(a, b)
-        -- We want to sort primarily top-to-bottom, and secondarily according to direction
-        -- If their y ranges overlap significantly, they are on the same "row"
-        local a_center_y = a.y + (a.h / 2)
-        local b_center_y = b.y + (b.h / 2)
-        
-        -- Rough same-row threshold ~10% of page height
-        if math.abs(a_center_y - b_center_y) < 0.1 then
-            if effective_dir == "rtl" then
-                return a.x > b.x -- Right to Left
-            else
-                return a.x < b.x -- Left to Right
-            end
-        end
-        
-        return a_center_y < b_center_y -- Top to bottom
-    end)
+    panels = self:sortPanelsByReadingOrder(panels)
 
     local has_panels = #panels > 0
     local has_full_page = self.display_full_page_before or self.display_full_page_after
@@ -1154,67 +1208,12 @@ function PanelZoomIntegration:analyzePageForPanelsExperimental(pageno)
 
     logger.info(string.format("DynamicPanelZoom (Experimental): %d components remaining after filtering", #final_boxes))
 
-    -- 4.1 Sort vertically by top `y` coordinate
-    table.sort(final_boxes, function(a, b)
-        return a.y < b.y
-    end)
-
-    -- 4.2 Group into rows by intersection
-    local rows = {}
-    local current_row = {}
-    local current_row_min_y = nil
-    local current_row_max_y = nil
-
-    for _, box in ipairs(final_boxes) do
-        if #current_row == 0 then
-            table.insert(current_row, box)
-            current_row_min_y = box.y
-            current_row_max_y = box.y + box.h
-        else
-            -- Check intersection with current row bounds
-            local box_max_y = box.y + box.h
-            -- A box intersects the row if its top is before row's bottom, and its bottom is after row's top
-            -- Adding a small margin
-            local margin = 0.05
-            if box.y < current_row_max_y - margin and box_max_y > current_row_min_y + margin then
-                -- Belongs to current row
-                table.insert(current_row, box)
-                -- Update row bounds
-                current_row_min_y = math.min(current_row_min_y, box.y)
-                current_row_max_y = math.max(current_row_max_y, box_max_y)
-            else
-                -- Start a new row
-                table.insert(rows, current_row)
-                current_row = {box}
-                current_row_min_y = box.y
-                current_row_max_y = box.y + box.h
-            end
-        end
-    end
-    if #current_row > 0 then
-        table.insert(rows, current_row)
-    end
-
-    -- 4.3 Sort each row horizontally and 4.4 Concatenate
+    -- 4. Order panels with a recursive XY-cut (rows, then columns, then rows within columns...)
     local effective_dir = self:getEffectiveReadingDirection()
-    local final_panels = {}
-    
-    for row_idx, row in ipairs(rows) do
-        table.sort(row, function(a, b)
-            if effective_dir == "rtl" then
-                return a.x > b.x
-            else
-                return a.x < b.x
-            end
-        end)
-        
-        for _, box in ipairs(row) do
-            table.insert(final_panels, box)
-        end
-    end
+    local final_panels = self:sortPanelsByReadingOrder(final_boxes)
 
     -- 5.1 Debug log the final ordered panel sequence
-    logger.info(string.format("DynamicPanelZoom (Experimental): Final sequence (%d panels, %d rows) for %s reading direction:", #final_panels, #rows, effective_dir))
+    logger.info(string.format("DynamicPanelZoom (Experimental): Final sequence (%d panels) for %s reading direction:", #final_panels, effective_dir))
     for i, p in ipairs(final_panels) do
         logger.info(string.format("  Panel %d: x=%.3f, y=%.3f, w=%.3f, h=%.3f", i, p.x, p.y, p.w, p.h))
     end
