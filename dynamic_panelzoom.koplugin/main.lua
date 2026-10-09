@@ -883,6 +883,32 @@ local function splitByGutters(boxes, pos, size)
     return groups
 end
 
+-- Removes boxes that are near-duplicates of, or nested inside, a bigger box
+-- (e.g. background noise detected as extra frames around a real panel).
+-- Boxes are checked from largest to smallest, so the outer box is always the one kept.
+-- `tolerance` is how far (as a fraction of the page) an edge may stick out and still count as inside.
+local function removeDuplicatePanels(panels, tolerance)
+    tolerance = tolerance or 0.02
+    local sorted = {}
+    for i, p in ipairs(panels) do sorted[i] = p end
+    table.sort(sorted, function(a, b) return a.w * a.h > b.w * b.h end)
+
+    local kept = {}
+    for _, box in ipairs(sorted) do
+        local inside = false
+        for _, outer in ipairs(kept) do
+            if box.x >= outer.x - tolerance and box.y >= outer.y - tolerance
+               and box.x + box.w <= outer.x + outer.w + tolerance
+               and box.y + box.h <= outer.y + outer.h + tolerance then
+                inside = true
+                break
+            end
+        end
+        if not inside then table.insert(kept, box) end
+    end
+    return kept
+end
+
 -- Order panels using a recursive XY-cut: split the page into horizontal bands,
 -- split each band into columns ordered by reading direction, and recurse.
 -- This keeps stacked and nested panels together in reading order.
@@ -1047,12 +1073,15 @@ function PanelZoomIntegration:analyzePageForPanels(pageno)
     page:close()
     if kc.free then kc:free() end
     
+    -- Drop noise boxes that duplicate or sit inside a real panel
+    panels = removeDuplicatePanels(panels)
+
     -- Sort panels based on reading direction (Manga TR->BL)
     panels = self:sortPanelsByReadingOrder(panels)
 
     local has_panels = #panels > 0
     local has_full_page = self.display_full_page_before or self.display_full_page_after
-    if has_panels and has_full_page then
+    if has_panels and has_full_page and #panels > 1 then
         if self.display_full_page_before then
             table.insert(panels, 1, { x = 0, y = 0, w = 1, h = 1})
         end
@@ -1221,7 +1250,7 @@ function PanelZoomIntegration:analyzePageForPanelsExperimental(pageno)
     local has_panels = #final_panels > 0
     local has_full_page = self.display_full_page_before or self.display_full_page_after
 
-    if has_panels and has_full_page then
+    if has_panels and has_full_page and #final_panels > 1 then
         if self.display_full_page_before then
             table.insert(final_panels, 1, {x = 0, y = 0, w = 1, h = 1})
         end
