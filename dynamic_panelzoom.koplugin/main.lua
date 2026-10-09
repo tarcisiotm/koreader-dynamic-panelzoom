@@ -25,6 +25,7 @@ local USER_SETTINGS = {
     zoom_spread_gesture_enabled = true,
     panelzoom_tap_forward_zone = "auto", -- auto, left, or right
     experimental_panel_sorting_enabled = false,
+    yonkoma_mode_enabled = false, -- Read 4koma pages column by column instead of row by row
     display_full_page_before = false,   -- Show full page before showing the first panel
     display_full_page_after = false,   -- Show full page after showing the last panel
     two_finger_rotation_enabled = false,   -- Enables rotating the panel with a two finger gesture
@@ -909,11 +910,76 @@ local function removeDuplicatePanels(panels, tolerance)
     return kept
 end
 
+-- Yonkoma (4koma) ordering: columns are independent strips, so cut columns first.
+-- When no column gutter exists, a panel spans the columns (title splash, wide panel):
+-- cut only at those spanning rows and recurse into each band.
+local function sortYonkomaPanels(panels, is_rtl)
+    local ordered = {}
+
+    local function visit(boxes)
+        if #boxes <= 1 then
+            if boxes[1] then table.insert(ordered, boxes[1]) end
+            return
+        end
+
+        local cols = splitByGutters(boxes, "x", "w")
+        if #cols > 1 then
+            if is_rtl then
+                for i = #cols, 1, -1 do visit(cols[i]) end
+            else
+                for _, col in ipairs(cols) do visit(col) end
+            end
+            return
+        end
+
+        local rows = splitByGutters(boxes, "y", "h")
+        if #rows > 1 then
+            local min_x, max_x = math.huge, -math.huge
+            for _, box in ipairs(boxes) do
+                min_x = math.min(min_x, box.x)
+                max_x = math.max(max_x, box.x + box.w)
+            end
+            local group_w = max_x - min_x
+
+            -- A spanning row is a single panel crossing the columns (title splash, wide panel).
+            -- A single panel that only fills one column stays in the band so the column cut can split it.
+            local bands, current = {}, {}
+            for _, row in ipairs(rows) do
+                if #row == 1 and row[1].w >= group_w * 0.6 then
+                    if #current > 0 then table.insert(bands, current); current = {} end
+                    table.insert(bands, row)
+                else
+                    for _, box in ipairs(row) do table.insert(current, box) end
+                end
+            end
+            if #current > 0 then table.insert(bands, current) end
+
+            -- Every band or row is a strict subset of boxes, so the recursion always ends
+            for _, band in ipairs(#bands > 1 and bands or rows) do visit(band) end
+            return
+        end
+
+        -- Overlapping panels: top-to-bottom, then by reading direction
+        table.sort(boxes, function(a, b)
+            if math.abs(a.y - b.y) > 0.02 then return a.y < b.y end
+            if is_rtl then return a.x + a.w > b.x + b.w end
+            return a.x < b.x
+        end)
+        for _, box in ipairs(boxes) do table.insert(ordered, box) end
+    end
+
+    visit(panels)
+    return ordered
+end
+
 -- Order panels using a recursive XY-cut: split the page into horizontal bands,
 -- split each band into columns ordered by reading direction, and recurse.
 -- This keeps stacked and nested panels together in reading order.
 function PanelZoomIntegration:sortPanelsByReadingOrder(panels)
     local is_rtl = self:getEffectiveReadingDirection() == "rtl"
+    if self.yonkoma_mode_enabled then
+        return sortYonkomaPanels(panels, is_rtl)
+    end
     local ordered = {}
 
     local function visit(boxes)
@@ -2146,6 +2212,16 @@ Full Refresh - Slowest: The strongest screen clear. Eliminates ghosting complete
                         callback = function()
                             self.experimental_panel_sorting_enabled = not self.experimental_panel_sorting_enabled
                             logger.info("DynamicPanelZoom: Experimental Panel Sorting set to " .. tostring(self.experimental_panel_sorting_enabled))
+                            self:invalidatePanelCache()
+                            self:savePluginSettings()
+                        end,
+                    },
+                    {
+                        text = _("Yonkoma (4koma) layout"),
+                        checked_func = function() return self.yonkoma_mode_enabled end,
+                        callback = function()
+                            self.yonkoma_mode_enabled = not self.yonkoma_mode_enabled
+                            logger.info("DynamicPanelZoom: Yonkoma mode set to " .. tostring(self.yonkoma_mode_enabled))
                             self:invalidatePanelCache()
                             self:savePluginSettings()
                         end,
