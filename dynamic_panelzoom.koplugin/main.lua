@@ -1710,65 +1710,49 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
         return false
     end
 
-    -- Render full panel
-
     local margin = 0 -- alternatively self.zoom_margin_percent or EDGE_THRESHOLD (0.05)
     local render_rect = self:panelToRect(panel, dim, margin)
     local panel_center = self:calculatePanelCenter(panel, dim)
 
-    local max_buffer_w = screen_w * 2.5
-    local max_buffer_h = screen_h * 2.5
+    -- Target scale (page units -> screen pixels) so the selected box fills the screen.
+    -- Capped relative to the current panel display scale to ignore accidental tiny spreads.
+    local MAX_ZOOM_OVER_PANEL = 8.0
+    local panel_display_scale = screen_rect.w / (panel.w * dim.w)
+    local target_scale = math.min(screen_w / box.w, screen_h / box.h)
+    target_scale = math.min(target_scale, panel_display_scale * MAX_ZOOM_OVER_PANEL)
 
-    local safe_scale = math.min(
-        max_buffer_w / render_rect.w,
-        max_buffer_h / render_rect.h,
-        3.5
-    )
+    -- Render the region directly at the target scale, so ImageViewer can show it 1:1
+    -- (scale_factor = 1 skips ImageWidget's full-image rescale copy, which can run out of memory).
+    -- Limit the rendered region to a fixed multiple of the screen size around the box,
+    -- clipped to the panel, so the buffer stays bounded no matter how large the panel is.
+    local MAX_BUFFER_SCREENS = 2.0
+    local max_region_w = (screen_w * MAX_BUFFER_SCREENS) / target_scale
+    local max_region_h = (screen_h * MAX_BUFFER_SCREENS) / target_scale
+
+    local box_cx = box.x + box.w / 2
+    local box_cy = box.y + box.h / 2
+
+    local region_w = math.min(render_rect.w, max_region_w)
+    local region_h = math.min(render_rect.h, max_region_h)
+    local region_x = math.max(render_rect.x, math.min(box_cx - region_w / 2, render_rect.x + render_rect.w - region_w))
+    local region_y = math.max(render_rect.y, math.min(box_cy - region_h / 2, render_rect.y + render_rect.h - region_h))
+    local region = { x = region_x, y = region_y, w = region_w, h = region_h }
+
+    logger.info(string.format("DynamicPanelZoom: Spread zoom scale %.4f, region (%.0f,%.0f,%.0fx%.0f)",
+        target_scale, region.x, region.y, region.w, region.h))
 
     local expanded_image = self:drawPagePartWithSettings(
         page,
-        render_rect,
+        region,
         panel_center,
         panel,
         dim,
-        safe_scale
+        target_scale
     )
 
     if not expanded_image then
         return false
     end
-
-    -- Initial framing
-    -- Size of the rendered image in pixels
-    local rendered_w = render_rect.w * safe_scale
-    local rendered_h = render_rect.h * safe_scale
-
-    -- Size of the selected box inside that rendered image
-    local rendered_box_w = box.w * safe_scale
-    local rendered_box_h = box.h * safe_scale
-
-    -- Safety checks for accidental tiny spread gestures
-    if rendered_box_w <= 0 or rendered_box_h <= 0 then
-        logger.warn("DynamicPanelZoom: Invalid rendered zoom box")
-        return false
-    end
-
-    local MIN_ZOOM_BOX_SIZE = 80
-    if rendered_box_w < MIN_ZOOM_BOX_SIZE or rendered_box_h < MIN_ZOOM_BOX_SIZE then
-        logger.info("DynamicPanelZoom: Spread gesture too small, ignoring")
-        return false
-    end
-
-    -- Initial ImageViewer scale
-    local initial_scale_factor = math.min(
-        screen_w / rendered_box_w,
-        screen_h / rendered_box_h
-    )
-
-    initial_scale_factor = math.max(
-        0.25,
-        math.min(initial_scale_factor, 8.0)
-    )
 
     local ok, ImageViewer = pcall(require, "ui/widget/imageviewer")
     if not ok then
@@ -1777,12 +1761,8 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
 
     self._zoom_overlay_active = true
 
-    local box_cx = box.x + box.w / 2
-    local box_cy = box.y + box.h / 2
-
-    local center_x_ratio = math.max(0, math.min(1, (box_cx - render_rect.x) / render_rect.w))
-
-    local center_y_ratio = math.max(0, math.min(1, (box_cy - render_rect.y) / render_rect.h))
+    local center_x_ratio = math.max(0, math.min(1, (box_cx - region.x) / region.w))
+    local center_y_ratio = math.max(0, math.min(1, (box_cy - region.y) / region.h))
 
     local image_viewer = ImageViewer:new{
         image = expanded_image,
@@ -1790,7 +1770,7 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
         fullscreen = true,
         with_title_bar = false,
         buttons_visible = true,
-        scale_factor = initial_scale_factor,
+        scale_factor = 1,
         _center_x_ratio = center_x_ratio,
         _center_y_ratio = center_y_ratio,
     }
