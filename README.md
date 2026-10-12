@@ -10,13 +10,25 @@ A fork of [koreader-dynamic-panelzoom](https://github.com/JorgeTheFox/koreader-d
 - Two-finger spread to zoom into the area your fingers frame
 - Configurable full page refresh options (based on the excellent work by [darkpf](https://github.com/darkpf/koreader-dynamic-panel-plus/) in their fork)
 - Tap zone in the top-right corner to show reading progress (toggleable in settings)
-- Experimental: Yonkoma (4koma) layout: reads each column top to bottom, right column first in RTL. To use: Experimental features → Yonkoma (4koma) layout
-
+- Experimental: Yonkoma (4koma) layout: reads each column top to bottom, right column first in RTL. To use: Experimental features -> Yonkoma (4koma) layout
 
 ## Fixed
+
 - Pages with no detected panels no longer exit the plugin
 - Fixed panel reading order on pages with uneven panel heights (e.g. one tall panel beside two stacked ones)
 - Boxes detected too close together are filtered out, so panels aren't repeated
+
+## Examples
+
+Some of the examples below feature the free comic [Pepper&Carrot](https://www.peppercarrot.com) by [David Revoy](https://www.davidrevoy.com), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+### Targeted Zoom
+
+https://github.com/user-attachments/assets/78857dc3-7d3c-4440-8103-9055e921b1e1
+
+### Full Refresh
+
+https://github.com/user-attachments/assets/6b28f905-e413-425f-87bf-6546e130660b
 
 # KOReader Dynamic Panel Zoom
 
