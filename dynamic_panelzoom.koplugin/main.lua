@@ -1805,8 +1805,8 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
         return false
     end
 
-    local margin = 0 -- alternatively self.zoom_margin_percent or EDGE_THRESHOLD (0.05)
-    local render_rect = self:panelToRect(panel, dim, margin)
+    -- Bounds for panning: the whole page, like KOReader's own zoom
+    local render_rect = { x = 0, y = 0, w = dim.w, h = dim.h }
     local panel_center = self:calculatePanelCenter(panel, dim)
 
     -- Target scale (page units -> screen pixels) so the selected box fills the screen.
@@ -1819,7 +1819,7 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
     -- Render the region directly at the target scale, so ImageViewer can show it 1:1
     -- (scale_factor = 1 skips ImageWidget's full-image rescale copy, which can run out of memory).
     -- Limit the rendered region to a fixed multiple of the screen size around the box,
-    -- clipped to the panel, so the buffer stays bounded no matter how large the panel is.
+    -- clipped to the page, so the buffer stays bounded no matter how large the page is.
     local MAX_BUFFER_SCREENS = 2.0
     local max_region_w = (screen_w * MAX_BUFFER_SCREENS) / target_scale
     local max_region_h = (screen_h * MAX_BUFFER_SCREENS) / target_scale
@@ -1829,9 +1829,15 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
 
     local region_w = math.min(render_rect.w, max_region_w)
     local region_h = math.min(render_rect.h, max_region_h)
-    local region_x = math.max(render_rect.x, math.min(box_cx - region_w / 2, render_rect.x + render_rect.w - region_w))
-    local region_y = math.max(render_rect.y, math.min(box_cy - region_h / 2, render_rect.y + render_rect.h - region_h))
-    local region = { x = region_x, y = region_y, w = region_w, h = region_h }
+
+    -- Builds a region of the fixed size centered on (cx, cy), clipped to the page
+    local function makeRegion(cx, cy)
+        local rx = math.max(render_rect.x, math.min(cx - region_w / 2, render_rect.x + render_rect.w - region_w))
+        local ry = math.max(render_rect.y, math.min(cy - region_h / 2, render_rect.y + render_rect.h - region_h))
+        return { x = rx, y = ry, w = region_w, h = region_h }
+    end
+
+    local region = makeRegion(box_cx, box_cy)
 
     logger.info(string.format("DynamicPanelZoom: Spread zoom scale %.4f, region (%.0f,%.0f,%.0fx%.0f)",
         target_scale, region.x, region.y, region.w, region.h))
@@ -1869,6 +1875,67 @@ function PanelZoomIntegration:switchToZoomModeAtBox(ges)
         _center_x_ratio = center_x_ratio,
         _center_y_ratio = center_y_ratio,
     }
+
+    -- Only part of the panel is rendered, so panning would stop at the region's edges.
+    -- When a pan would go past an edge that still has more page behind it, render a new
+    -- region (same size, so memory stays bounded) shifted in the pan direction, and swap it in.
+    local original_panBy = image_viewer.panBy
+    image_viewer.panBy = function(this, x, y)
+        local wg = this._image_wg
+        local sf = this.scale_factor or 1
+        if not (wg and wg.getPanByCenterRatio and sf > 0) then
+            return original_panBy(this, x, y)
+        end
+
+        -- Wanted view center in page coordinates (getPanByCenterRatio doesn't clamp)
+        local want_rx, want_ry = wg:getPanByCenterRatio(x, y)
+        local want_cx = region.x + want_rx * region.w
+        local want_cy = region.y + want_ry * region.h
+
+        -- Half of the visible viewport, in page units
+        local half_vw = (wg.width or screen_w) / (2 * target_scale * sf)
+        local half_vh = (wg.height or screen_h) / (2 * target_scale * sf)
+
+        local EPS = 1
+        local past_left   = want_cx - half_vw < region.x - EPS and region.x > render_rect.x + EPS
+        local past_right  = want_cx + half_vw > region.x + region.w + EPS and region.x + region.w < render_rect.x + render_rect.w - EPS
+        local past_top    = want_cy - half_vh < region.y - EPS and region.y > render_rect.y + EPS
+        local past_bottom = want_cy + half_vh > region.y + region.h + EPS and region.y + region.h < render_rect.y + render_rect.h - EPS
+
+        if not (past_left or past_right or past_top or past_bottom) then
+            return original_panBy(this, x, y)
+        end
+
+        -- Place the new region so the view sits at its trailing side,
+        -- leaving as much room as possible in the pan direction.
+        local lead_x = math.max(0, region_w / 2 - half_vw)
+        local lead_y = math.max(0, region_h / 2 - half_vh)
+        local new_cx = want_cx + (past_right and lead_x or 0) - (past_left and lead_x or 0)
+        local new_cy = want_cy + (past_bottom and lead_y or 0) - (past_top and lead_y or 0)
+        local new_region = makeRegion(new_cx, new_cy)
+
+        local new_image = self:drawPagePartWithSettings(
+            page,
+            new_region,
+            panel_center,
+            panel,
+            dim,
+            target_scale
+        )
+        if not new_image then
+            return original_panBy(this, x, y)
+        end
+
+        logger.info(string.format("DynamicPanelZoom: Pan re-render region (%.0f,%.0f,%.0fx%.0f)",
+            new_region.x, new_region.y, new_region.w, new_region.h))
+
+        region = new_region
+        this.image = new_image
+        this._center_x_ratio = math.max(0, math.min(1, (want_cx - region.x) / region.w))
+        this._center_y_ratio = math.max(0, math.min(1, (want_cy - region.y) / region.h))
+        this:update()
+        return true
+    end
 
     local original_onClose = image_viewer.onClose
     image_viewer.onClose = function(this, ...)
